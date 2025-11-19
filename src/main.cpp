@@ -1,25 +1,35 @@
 #include <iostream>
-#include <string>
-#include "Graph.hpp"
-#include "Simulation.hpp"
 #include <fstream>
+#include <vector>
+#include <string>
+#include <cstring>
+#include <sys/stat.h>
 #include <filesystem>
+#include "Simulation.hpp"
+#include "Graph.hpp"
+
 namespace fs = std::filesystem;
+
+// Helper to write the histogram
 static void write_hist_csv(const std::vector<double>& hist, const std::string& path) {
     std::ofstream out(path);
-    out << "# queue_length,probability\n";
+    out << "QueueLength,Probability\n";
     for (size_t i = 0; i < hist.size(); ++i) {
         if (hist[i] > 0.0)
             out << i << "," << hist[i] << "\n";
     }
 }
 
+// Helper to write metrics JSON
 static void write_metrics_json(const std::string& path,
                                const std::string& policy,
                                const std::string& graph_type,
                                int n, int m, double lambda_, double mu_,
                                int k, int L, int qmax,
-                               double total_req_dist) {
+                               double total_req_dist,
+                               double mean_Q,
+                               double mean_W,
+                               double avg_req_dist) {
     std::ofstream out(path);
     out << "{\n";
     out << "  \"policy\": \"" << policy << "\",\n";
@@ -32,87 +42,76 @@ static void write_metrics_json(const std::string& path,
     out << "  \"L\": " << L << ",\n";
     out << "  \"qmax\": " << qmax << ",\n";
     out << "  \"total_req_dist\": " << total_req_dist << ",\n";
-    out << "  \"avg_req_dist\": " << (total_req_dist / m) << "\n";
+    out << "  \"mean_Q\": " << mean_Q << ",\n";
+    out << "  \"mean_W\": " << mean_W << ",\n";
+    out << "  \"avg_req_dist\": " << avg_req_dist << "\n";
     out << "}\n";
 }
-int main(int argc, char** argv) {
-    // default params
-    int n = 100;
+
+int main(int argc, char* argv[]) {
+    // Default Parameters
+    int n = 1000;
     int m = 100000;
-    double lambda_ = 0.95;
-    double mu_ = 1.0;
-    std::string policy = "spatialKL"; // "pot", "poKL", "spatialKL"
-    std::string graph_type = "cycle"; // "cycle" or "grid"
+    double lambda = 0.9;
+    double mu = 1.0;
+    std::string policy = "pot";
+    std::string topo = "cycle";
     int k = 1;
     int L = 1;
     int qmax = 100;
-    std::string outdir = "plots";
-    // very simple CLI: --n 200 --policy pot etc.
-    for (int i = 1; i + 1 < argc; i += 2) {
-        std::string key = argv[i];
-        std::string val = argv[i+1];
-        if (key == "--n") n = std::stoi(val);
-        else if (key == "--m") m = std::stoi(val);
-        else if (key == "--lambda") lambda_ = std::stod(val);
-        else if (key == "--mu") mu_ = std::stod(val);
-        else if (key == "--policy") policy = val;
-        else if (key == "--graph") graph_type = val;
-        else if (key == "--k") k = std::stoi(val);
-        else if (key == "--L") L = std::stoi(val);
-        else if (key == "--qmax") qmax = std::stoi(val);
-        else if (key == "--outdir") outdir = val;
+    std::string outdir = "results";
+    std::string tag_suffix = "";
+
+    // CLI Parsing
+    for(int i=1; i<argc; ++i) {
+        if(strcmp(argv[i], "--n")==0) n = std::stoi(argv[++i]);
+        else if(strcmp(argv[i], "--m")==0) m = std::stoi(argv[++i]);
+        else if(strcmp(argv[i], "--lambda")==0) lambda = std::stod(argv[++i]);
+        else if(strcmp(argv[i], "--mu")==0) mu = std::stod(argv[++i]);
+        else if(strcmp(argv[i], "--policy")==0) policy = argv[++i];
+        else if(strcmp(argv[i], "--topo")==0) topo = argv[++i];
+        else if(strcmp(argv[i], "--k")==0) k = std::stoi(argv[++i]);
+        else if(strcmp(argv[i], "--L")==0) L = std::stoi(argv[++i]);
+        else if(strcmp(argv[i], "--outdir")==0) outdir = argv[++i];
+        else if(strcmp(argv[i], "--tag")==0) tag_suffix = argv[++i];
     }
-    
+
+    // Ensure output directory exists
     fs::create_directories(outdir);
 
-    std::vector<std::vector<int>> G;
-    if (graph_type == "cycle") {
-        G = build_cycle_graph(n);
-    } else if (graph_type == "grid") {
-        G = build_grid_graph(n);
-    } else {
-        std::cerr << "Unknown graph type, using cycle.\n";
-        G = build_cycle_graph(n);
+    // 1. Setup Neighbors (Optimized / Math-based)
+    std::vector<std::vector<int>> k_nbrs;
+    std::vector<std::vector<int>> dist; // Empty to trigger math calc in Simulation.cpp
+
+    // Generate neighbors only if policy requires them (SpatialKL)
+    // For PoT/PoKL, k often implies global choices, but spatial uses k_nbrs
+    if (policy == "spatialKL") {
+        if (topo == "cycle") k_nbrs = generate_cycle_neighbors(n, k);
+        else k_nbrs = generate_grid_neighbors(n, k);
     }
 
-    auto dist = all_pairs_shortest_paths(G);
+    // 2. Run Simulation
+    std::cout << "Running: N=" << n << " Policy=" << policy << " Lambda=" << lambda << "..." << std::flush;
+    
+    Simulation sim(n, lambda, m, mu, policy, topo, dist, k_nbrs, k, L, qmax);
+    SimulationResult result = sim.run();
 
-    std::mt19937_64 rng(987654321ULL);
-    auto k_nbrs = get_k_hop_neighbors(dist, k, rng);
+    std::cout << " Done. E[Q]=" << result.mean_Q << "\n";
 
-    Simulation sim(n, lambda_, m, mu_, policy, G, dist, k_nbrs, k, L, qmax);
-    auto result = sim.run();
+    // 3. Save Results
+    // Create a descriptive filename automatically
+    std::string filename_base = policy + "_" + topo 
+                              + "_n" + std::to_string(n) 
+                              + "_lam" + std::to_string(lambda).substr(0,4);
+    
+    if (!tag_suffix.empty()) filename_base += "_" + tag_suffix;
 
-    const auto &hist = result.first;
-    double total_req_dist = result.second;
+    std::string hist_path = outdir + "/" + filename_base + "_hist.csv";
+    std::string meta_path = outdir + "/" + filename_base + "_metrics.json";
 
-    // after you compute `hist` and `total_req_dist`
-    std::string tag = policy + "_" + graph_type
-        + "_n" + std::to_string(n)
-        + "_m" + std::to_string(m)
-        + "_k" + std::to_string(k)
-        + "_L" + std::to_string(L);
-
-    std::string hist_path = (fs::path(outdir) / (tag + "_hist.csv")).string();
-    std::string metrics_path = (fs::path(outdir) / (tag + "_metrics.json")).string();
-
-    write_hist_csv(hist, hist_path);
-    write_metrics_json(metrics_path, policy, graph_type,
-                    n, m, lambda_, mu_, k, L, qmax, total_req_dist);
-
-    std::cout << "Wrote: " << hist_path << "\n";
-    std::cout << "Wrote: " << metrics_path << "\n";
-
-    std::cout << "Queue-length distribution for queue n/2:\n";
-    for (int i = 0; i < (int)hist.size(); i++) {
-        if (hist[i] > 0.0) {
-            std::cout << i << " " << hist[i] << "\n";
-        }
-    }
-
-    std::cout << "Total request distance: " << total_req_dist << "\n";
-    std::cout << "Average request distance: " << (total_req_dist / m) << "\n";
+    write_hist_csv(result.hist, hist_path);
+    write_metrics_json(meta_path, policy, topo, n, m, lambda, mu, k, L, qmax, 
+                       result.total_req_dist, result.mean_Q, result.mean_W, result.avg_req_dist);
 
     return 0;
 }
-
