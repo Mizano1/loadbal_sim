@@ -4,7 +4,7 @@ import pandas as pd
 from pathlib import Path
 import sys
 
-RESULTS_DIR = Path("results")
+RESULTS_DIR = Path("experiments_3-12-2025/lambda_by_response_time")
 
 def plot_mean_response_vs_lambda():
     # Find all JSON metric files

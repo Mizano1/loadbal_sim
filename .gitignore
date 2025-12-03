@@ -2,3 +2,8 @@
 *.csv
 *.png
 *.o
+*.gz
+sort_trace_data.py
+process_2019_json.py
+run_pot_comparison.sh
+plot_comparison_spatial.py

@@ -2,9 +2,9 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from pathlib import Path
 import sys
-
+from matplotlib.ticker import MultipleLocator
 # Directory containing results
-RESULTS_DIR = Path("results")
+RESULTS_DIR = Path("experiments_3-12-2025/d=3_large_n")
 
 def plot_distributions():
     # Find all histogram files
@@ -42,10 +42,20 @@ def plot_distributions():
     plt.title("Queue Length Distribution Comparison", fontsize=14)
     plt.xlabel("Queue Length (k)", fontsize=12)
     plt.ylabel("Probability P(Q=k)", fontsize=12)
-    plt.xlim(0, 15) # Focus on the head of the distribution
-    plt.grid(True, linestyle='--', alpha=0.7)
+    # ---- AXES SETTINGS YOU WANT ----
+    ax = plt.gca()
+
+    # start at (0,0) with no extra margin
+    ax.set_xlim(left=0, right=15)
+    ax.set_ylim(bottom=0, top=0.5)      # or top=0.45 depending on your max prob
+    ax.margins(x=0, y=0)
+
+    # y-axis ticks: 0, 0.05, 0.10, ...
+    ax.yaxis.set_major_locator(MultipleLocator(0.05))
+
+    ax.grid(True, linestyle='--', alpha=0.7, which="both")
+
     plt.legend(fontsize=10)
-    
     # Save
     output_file = RESULTS_DIR / "load_distribution_comparison.png"
     plt.savefig(output_file, dpi=300, bbox_inches="tight")
