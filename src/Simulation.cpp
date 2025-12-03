@@ -87,11 +87,15 @@ double Simulation::calculate_distance(int u, int v) {
 
     // Cluster Logic
     if (topology == "cluster") {
-        if (get_cluster_id(u) == get_cluster_id(v)) {
-            return comm_cost;       // Local Cost c
-        } else {
-            return 2.0 * comm_cost; // Remote Cost 2c
-        }
+        // 1. Determine Topological Distance (Hops)
+        // Same Cluster = 1 Hop 
+        // Different Cluster = 2 Hops 
+        double hops = (get_cluster_id(u) == get_cluster_id(v)) ? 1.0 : 2.0;
+
+        // 2. Apply Weighting
+        double weight = (comm_cost > 1e-9) ? comm_cost : 1.0;
+
+        return hops * weight;
     }
 
     if (!dist.empty()) return (double)dist[u][v];
@@ -149,16 +153,43 @@ int Simulation::choose_node(int s) {
         }
     } 
     else if (policy == "spatialKL") {
-        for (int v : k_nbrs[s]) candidates.push_back(v);
-        std::unordered_set<int> used(candidates.begin(), candidates.end());
-        int target = 1 + k_nbrs[s].size() + L;
-        while ((int)candidates.size() < target) {
-            int r = U(rng);
-            if (used.find(r) == used.end()) {
-                used.insert(r);
-                candidates.push_back(r);
+        if (topology == "cluster") {
+            // CLUSTER LOGIC:
+            // k_nbrs contains the entire cluster. We must sample  'k' neighbors.
+            const std::vector<int>& my_cluster_nodes = k_nbrs[s];
+            
+            if (!my_cluster_nodes.empty()) {
+                if ((int)my_cluster_nodes.size() <= k) {
+                    // Cluster is small, just take everyone
+                    for (int v : my_cluster_nodes) candidates.push_back(v);
+                } else {
+                    // Randomly sample exactly 'k' DISTINCT neighbors from the cluster
+                    std::uniform_int_distribution<int> dist_idx(0, my_cluster_nodes.size() - 1);
+                    std::unordered_set<int> picked_indices;
+                    
+                    while ((int)picked_indices.size() < k) {
+                        int idx = dist_idx(rng);
+                        if (picked_indices.find(idx) == picked_indices.end()) {
+                            picked_indices.insert(idx);
+                            candidates.push_back(my_cluster_nodes[idx]);
+                        }
+                    }
+                }
+            }
+        } else {
+            // GRID / CYCLE LOGIC:
+            for (int v : k_nbrs[s]) candidates.push_back(v);
+            std::unordered_set<int> used(candidates.begin(), candidates.end());
+            int target = 1 + k_nbrs[s].size() + L;
+            while ((int)candidates.size() < target) {
+                int r = U(rng);
+                if (used.find(r) == used.end()) {
+                    used.insert(r);
+                    candidates.push_back(r);
+                }
             }
         }
+    
     }
 
     int best = candidates[0];
