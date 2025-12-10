@@ -4,7 +4,7 @@ from pathlib import Path
 import sys
 from matplotlib.ticker import MultipleLocator
 # Directory containing results
-RESULTS_DIR = Path("experiments_3-12-2025/cluster_test_d=3")
+RESULTS_DIR = Path("experiments_10_12_2025/large_scale_queue")
 
 def plot_distributions():
     # Find all histogram files

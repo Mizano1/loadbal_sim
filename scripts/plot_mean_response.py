@@ -2,73 +2,57 @@ import matplotlib.pyplot as plt
 import json
 import pandas as pd
 from pathlib import Path
-import sys
 
-RESULTS_DIR = Path("experiments_3-12-2025/lambda_by_response_time")
+RESULTS_DIR = Path("experiments_10_12_2025/results_large_scale") 
 
-def plot_mean_response_vs_lambda():
-    # Find all JSON metric files
+def plot_waiting_time():
     json_files = sorted(RESULTS_DIR.glob("*_metrics.json"))
-    
-    if not json_files:
-        print(f"No *_metrics.json files found in {RESULTS_DIR}.")
-        return
-
     data = []
-
-    print(f"Found {len(json_files)} metric files. Parsing...")
 
     for f in json_files:
         try:
             with open(f, 'r') as file:
                 content = json.load(file)
                 
-                # Extract relevant fields
-                policy = content.get("policy", "Unknown")
-                lam = content.get("lambda", 0.0)
-                mean_w = content.get("mean_W", 0.0)
+                # 1. Get E[R] (mean_W in your code)
+                e_r = content.get("mean_W", 0.0)
                 
+                # 2. Get Service Rate (mu)
+                mu = content.get("mu", 1.0)
+                
+                # 3. Calculate E[W] = E[R] - 1/mu
+                avg_service_time = 1.0 / mu if mu > 0 else 0
+                e_w = e_r - avg_service_time
+                
+                # Safety check: E[W] theoretically can't be negative, 
+                # but statistical noise in low-load sims might make it slightly < 0.
+                if e_w < 0: e_w = 0 
+
                 data.append({
-                    "Policy": policy,
-                    "Lambda": lam,
-                    "Mean_Response_Time": mean_w
+                    "Policy": content.get("policy", "Unknown"),
+                    "Lambda": content.get("lambda", 0.0),
+                    "WaitingTime": e_w
                 })
         except Exception as e:
             print(f"Skipping {f.name}: {e}")
 
-    if not data:
-        print("No valid data found.")
-        return
-
-    # Create DataFrame
     df = pd.DataFrame(data)
-    
-    # Sort by Lambda
     df = df.sort_values("Lambda")
 
-    # Plotting
     plt.figure(figsize=(10, 6))
-    
-    policies = df["Policy"].unique()
-    
-    for pol in policies:
-        subset = df[df["Policy"] == pol]
-        plt.plot(subset["Lambda"], subset["Mean_Response_Time"], 
+    for pol in df["Policy"].unique():
+        subset = df[df["Policy"] == pol].sort_values("Lambda")
+        plt.plot(subset["Lambda"], subset["WaitingTime"], 
                  marker='o', linewidth=2, label=pol)
 
-    plt.title("Mean Response Time vs. Lambda", fontsize=14)
+    plt.title("Expected Waiting Time ($E[W]$) vs. Lambda", fontsize=14)
     plt.xlabel("System Load ($\lambda$)", fontsize=12)
-    plt.ylabel("Mean Response Time ($E[W]$)", fontsize=12)
+    plt.ylabel("Mean Waiting Time ($E[W]$)", fontsize=12)
     plt.grid(True, linestyle='--', alpha=0.7)
     plt.legend()
     
-    output_file = RESULTS_DIR / "plot_mean_response_json.png"
-    plt.savefig(output_file, dpi=300, bbox_inches="tight")
-    print(f"Plot saved to {output_file}")
+    plt.savefig(RESULTS_DIR / "plot_waiting_time.png", dpi=300, bbox_inches="tight")
+    print(f"Plot saved to {RESULTS_DIR}/plot_waiting_time.png")
 
 if __name__ == "__main__":
-    if not RESULTS_DIR.exists():
-        print(f"Error: {RESULTS_DIR} does not exist.")
-        sys.exit(1)
-        
-    plot_mean_response_vs_lambda()
+    plot_waiting_time()

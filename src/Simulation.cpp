@@ -154,19 +154,16 @@ int Simulation::choose_node(int s) {
     } 
     else if (policy == "spatialKL") {
         if (topology == "cluster") {
-            // CLUSTER LOGIC:
-            // k_nbrs contains the entire cluster. We must sample  'k' neighbors.
+            // --- CLUSTER LOGIC (Corrected) ---
             const std::vector<int>& my_cluster_nodes = k_nbrs[s];
             
+            // 1. Pick 'k' neighbors from the local cluster
             if (!my_cluster_nodes.empty()) {
                 if ((int)my_cluster_nodes.size() <= k) {
-                    // Cluster is small, just take everyone
                     for (int v : my_cluster_nodes) candidates.push_back(v);
                 } else {
-                    // Randomly sample exactly 'k' DISTINCT neighbors from the cluster
                     std::uniform_int_distribution<int> dist_idx(0, my_cluster_nodes.size() - 1);
                     std::unordered_set<int> picked_indices;
-                    
                     while ((int)picked_indices.size() < k) {
                         int idx = dist_idx(rng);
                         if (picked_indices.find(idx) == picked_indices.end()) {
@@ -176,8 +173,21 @@ int Simulation::choose_node(int s) {
                     }
                 }
             }
+
+            // 2. Pick 'L' global random neighbors
+            std::unordered_set<int> used(candidates.begin(), candidates.end());
+            int target_size = candidates.size() + L;
+
+            while ((int)candidates.size() < target_size) {
+                int r = U(rng);
+                if (used.find(r) == used.end()) {
+                    used.insert(r);
+                    candidates.push_back(r);
+                }
+            }
+
         } else {
-            // GRID / CYCLE LOGIC:
+            // --- GRID / CYCLE LOGIC ---
             for (int v : k_nbrs[s]) candidates.push_back(v);
             std::unordered_set<int> used(candidates.begin(), candidates.end());
             int target = 1 + k_nbrs[s].size() + L;
@@ -189,9 +199,9 @@ int Simulation::choose_node(int s) {
                 }
             }
         }
-    
     }
 
+    // --- SELECTION LOGIC ---
     int best = candidates[0];
     double best_score = 1e30;
 
