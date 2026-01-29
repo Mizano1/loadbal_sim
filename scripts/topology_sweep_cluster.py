@@ -12,16 +12,19 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 # CONFIGURATION
 # ==========================================
 BIN_PATH = "./bin/loadbal_sim"
-BASE_OUT_DIR = Path("grid_remake") 
+BASE_OUT_DIR = Path("results_cluster_sweep") 
 
 # System Parameters
 N = 525
+SERVERS_PER_CLUSTER = 25
+NUM_CLUSTERS = N // SERVERS_PER_CLUSTER  # 21 Clusters
+
 M = 100_000_000             
 COMM_COST = 1.0         
 
 # Sweep Parameters
-#TOPOLOGIES = ["grid", "cycle"]
-TOPOLOGIES = ["grid"]
+# We only run "cluster" here
+TOPOLOGIES = ["cluster"]
 POWERS = [3, 4, 5, 6, 7, 8]
 LAMBDAS = [0.6, 0.65, 0.7, 0.75, 0.8, 0.9, 0.95]
 
@@ -30,6 +33,11 @@ MAX_WORKERS = os.cpu_count()
 # ==========================================
 
 def get_strategies(power):
+    """
+    Define policies based on Power d.
+    Global Po(d): k=0, L=d-1
+    Spatial Po(d): Hybrid approach -> k=d-2 (local), L=1 (global)
+    """
     return [
         {
             "name": f"Global Po{power}",
@@ -54,7 +62,6 @@ def run_single_simulation(args):
     
     tag = f"{topo}_P{power}_{strategy['policy']}"
     
-    # --- FIX: Changed .4f to .2f to match your C++ filenames ---
     json_filename = f"{strategy['policy']}_{topo}_n{N}_lam{lam:.2f}_{tag}_metrics.json"
     json_path = out_dir / json_filename
     
@@ -73,10 +80,12 @@ def run_single_simulation(args):
             pass # File corrupt, re-run
 
     # --- RUN SIMULATION ---
+    # Note: Added --clusters and --cost specifically for this script
     cmd = [
         BIN_PATH,
         "--n", str(N), "--m", str(M), "--lambda", str(lam),
         "--policy", strategy["policy"], "--topo", topo,
+        "--clusters", str(NUM_CLUSTERS),
         "--cost", str(COMM_COST),
         "--k", str(strategy["k"]), "--L", str(strategy["L"]),
         "--outdir", str(out_dir), "--tag", tag
@@ -85,11 +94,8 @@ def run_single_simulation(args):
     try:
         subprocess.run(cmd, stdout=subprocess.DEVNULL, check=True)
         
-        # If the simulation succeeded, the file MUST exist now.
-        # But wait! If C++ generated .90 and Python looks for .90, we are good.
+        # Validation check
         if not json_path.exists():
-             # Fallback check: maybe it generated .9000? 
-             # (Unlikely given your report, but safety first)
              pass 
 
         with open(json_path, 'r') as f:
@@ -104,7 +110,8 @@ def run_single_simulation(args):
         return {"status": "failed", "error": f"{str(e)} (Path: {json_path})"}
 
 def main():
-    print(f"--- PARALLEL SIMULATION SWEEP ({MAX_WORKERS} Cores) ---")
+    print(f"--- PARALLEL CLUSTER SWEEP ({MAX_WORKERS} Cores) ---")
+    print(f"Nodes: {N} | Clusters: {NUM_CLUSTERS} | Cost Penalty: {COMM_COST}")
     
     # 1. Compile
     subprocess.run(["make"], check=True, stdout=subprocess.DEVNULL)
@@ -128,17 +135,14 @@ def main():
     
     # 3. Execute in Parallel
     with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        # Submit all tasks
         futures = {executor.submit(run_single_simulation, t): t for t in tasks}
         
-        # Monitor Progress
         completed = 0
         skipped = 0
         for future in as_completed(futures):
             res = future.result()
             completed += 1
             
-            # Simple Progress Bar
             sys.stdout.write(f"\rProgress: {completed}/{len(tasks)} ")
             sys.stdout.flush()
             
@@ -161,12 +165,17 @@ def main():
     for topo in TOPOLOGIES:
         plot_out_dir = BASE_OUT_DIR / topo
         
-        # --- E[R] vs Lambda ---
+        # --- E[R] vs Lambda (Per Power) ---
         for power in POWERS:
             subset = df[(df["Topology"] == topo) & (df["Power"] == power)]
             if subset.empty: continue
             
             plt.figure(figsize=(8, 6))
+            
+            # Find min/max lambda for x-axis scaling
+            min_lam = subset["Lambda"].min()
+            max_lam = subset["Lambda"].max()
+
             for pol in subset["Policy"].unique():
                 data = subset[subset["Policy"] == pol].sort_values("Lambda")
                 strat_name = data["Strategy"].iloc[0]
@@ -177,6 +186,14 @@ def main():
             plt.ylabel("Mean Response Time ($E[R]$)")
             plt.grid(True, linestyle='--', alpha=0.5)
             plt.legend()
+            
+            # --- FORCE AXES 0,0 ---
+            ax = plt.gca()
+            ax.set_ylim(bottom=0)
+            ax.set_xlim(left=min_lam, right=max_lam)
+            ax.margins(x=0, y=0)
+            # ----------------------
+
             plt.savefig(plot_out_dir / f"resp_vs_lambda_{topo}_P{power}.png", dpi=300)
             plt.close()
 
@@ -197,6 +214,12 @@ def main():
         plt.ylabel("Mean Response Time ($E[R]$)")
         plt.grid(True, linestyle='--', alpha=0.5)
         plt.legend()
+        
+        # Force Axes
+        ax = plt.gca()
+        ax.set_ylim(bottom=0)
+        ax.margins(x=0.05) # Small margin ok for Power x-axis (integers)
+        
         plt.savefig(plot_out_dir / f"summary_resp_vs_power_{topo}.png", dpi=300)
         plt.close()
 
@@ -210,6 +233,12 @@ def main():
         plt.ylabel("$E[c]$")
         plt.grid(True, linestyle='--', alpha=0.5)
         plt.legend()
+        
+        # Force Axes
+        ax = plt.gca()
+        ax.set_ylim(bottom=0)
+        ax.margins(x=0.05)
+        
         plt.savefig(plot_out_dir / f"summary_cost_vs_power_{topo}.png", dpi=300)
         plt.close()
 

@@ -4,7 +4,7 @@ from pathlib import Path
 import sys
 from matplotlib.ticker import MultipleLocator
 # Directory containing results
-RESULTS_DIR = Path("experiments_10_12_2025/large_scale_queue")
+RESULTS_DIR = Path("Distrinution_plot/grid")
 
 def plot_distributions():
     # Find all histogram files
@@ -47,7 +47,7 @@ def plot_distributions():
 
     # start at (0,0) with no extra margin
     ax.set_xlim(left=0, right=15)
-    ax.set_ylim(bottom=0, top=0.5)      # or top=0.45 depending on your max prob
+    #ax.set_ylim(bottom=0, top=0.5)      # or top=0.45 depending on your max prob
     ax.margins(x=0, y=0)
 
     # y-axis ticks: 0, 0.05, 0.10, ...

@@ -199,22 +199,77 @@ int Simulation::choose_node(int s) {
                 }
             }
         }
+        
     }
+    else if (policy == "weighted") {
+        // 1. Define Neighborhood & Weights
+        // We look at 'k' nodes to the left and 'k' nodes to the right.
+        std::vector<int> neighborhood;
+        std::vector<double> weights;
+        
+        neighborhood.reserve(2 * k);
+        weights.reserve(2 * k);
+
+        // Loop from distance 1 up to k (the window radius)
+        for (int dist = 1; dist <= k; ++dist) {
+            // Right Neighbor: (s + dist) % n
+            int right = (s + dist) % n;
+            neighborhood.push_back(right);
+            weights.push_back(1.0 / dist); // Weight decreases with distance
+
+            // Left Neighbor: (s - dist + n) % n
+            int left = (s - dist + n) % n;
+            neighborhood.push_back(left);
+            weights.push_back(1.0 / dist); 
+        }
+
+        // 2. Sample Candidates
+        // discrete_distribution normalizes weights so they sum to 1.0
+        std::discrete_distribution<int> dist_sampler(weights.begin(), weights.end());
+        
+        std::unordered_set<int> used;
+        used.insert(s);
+
+        // We want 'L' *additional* probes
+        int target_size = 1 + L; 
+
+        while ((int)candidates.size() < target_size) {
+            // 'idx' is the index within our local 'neighborhood' vector
+            int idx = dist_sampler(rng);
+            int node = neighborhood[idx];
+
+            if (used.find(node) == used.end()) {
+                used.insert(node);
+                candidates.push_back(node);
+            }
+        }
+    }
+    
 
     // --- SELECTION LOGIC ---
     int best = candidates[0];
     double best_score = 1e30;
 
+    //for (int cand : candidates) {
+    //    double score;
+    //    if (topology == "cluster") {
+    //        // Score = Queue Length + Comm Cost
+    //        double processing_time = q[cand]; 
+    //        double cost = calculate_distance(s, cand);
+    //        score = processing_time + cost;
+    //    } else {
+    //        score = (double)q[cand];
+    //    }
+
+    //    if (score < best_score) {
+    //        best = cand;
+    //    }
+    //}
+    //return best;
     for (int cand : candidates) {
-        double score;
-        if (topology == "cluster") {
-            // Score = Queue Length + Comm Cost
-            double processing_time = q[cand]; 
-            double cost = calculate_distance(s, cand);
-            score = processing_time + cost;
-        } else {
-            score = (double)q[cand];
-        }
+
+        
+        double score = (double)q[cand]; 
 
         if (score < best_score) {
             best_score = score;

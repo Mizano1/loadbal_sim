@@ -23,6 +23,7 @@ COST = 1.0                  # Communication Cost Penalty
 # System Loads to Test
 # Focusing on high load where differences matter most
 LAMBDAS = [0.80, 0.85, 0.90, 0.95, 0.98, 0.99]
+LAMBDAS =[0.95]
 
 # Policies to Compare
 STRATEGIES = [
@@ -36,7 +37,7 @@ STRATEGIES = [
     {
         "name": "Hybrid Spatial (k=2, L=1)",
         "policy": "spatialKL",
-        "k": 2, "L": 1,      # 2 local neighbors + 1 global random
+        "k": 1, "L": 1,      # 2 local neighbors + 1 global random
         "color": "orange",
         "marker": "s"
     }
