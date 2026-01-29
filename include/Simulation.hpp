@@ -21,13 +21,14 @@ struct TraceJob {
 
 class Simulation {
 public:
-    // Constructor
+    // UPDATE: Constructor now accepts 'max_shards_'
     Simulation(int n_, double lambda__, int m_, double mu__,
                const std::string &policy_,
                const std::string &topology_,
                const std::vector<std::vector<int>> &dist_,
                const std::vector<std::vector<int>> &k_nbrs_,
-               int k_, int L_, int qmax_,
+               int k_, int L_, int qmax_, 
+               int max_shards_, // <--- NEW PARAMETER
                int num_clusters_ = 1, 
                double comm_cost_ = 0.0,
                const std::string& trace_file_path = "");
@@ -47,6 +48,7 @@ private:
     int k;
     int L;
     int qmax;
+    int max_shards; // <--- NEW VARIABLE
     
     // Cluster parameters
     int num_clusters;
@@ -69,6 +71,10 @@ private:
 
     double exp_rv(double rate);
     int choose_node(int s);
+    
+    // UPDATE: Declare the new helper function
+    std::vector<int> choose_multi_nodes(int s, int count); 
+
     double calculate_distance(int u, int v); 
     int get_cluster_id(int node_index) const;
     void load_trace(const std::string& filepath);

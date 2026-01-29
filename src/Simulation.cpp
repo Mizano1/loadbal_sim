@@ -10,7 +10,7 @@ Simulation::Simulation(int n_, double lambda__, int m_, double mu__,
                        const std::string &topology_,
                        const std::vector<std::vector<int>> &dist_,
                        const std::vector<std::vector<int>> &k_nbrs_,
-                       int k_, int L_, int qmax_,
+                       int k_, int L_, int qmax_,int max_shards_,
                        int num_clusters_, double comm_cost_,
                        const std::string& trace_file_path)
     : n(n_), lambda_(lambda__), m(m_), mu_(mu__), 
@@ -23,7 +23,9 @@ Simulation::Simulation(int n_, double lambda__, int m_, double mu__,
       trace_idx(0), use_trace(false)
 {
     rng.seed(123456789ULL);
-    
+    // Safety check for shards
+    if (max_shards < 1) max_shards = 1;
+
     // Load Trace if provided
     if (!trace_file_path.empty()) {
         load_trace(trace_file_path);
@@ -131,7 +133,62 @@ double Simulation::calculate_distance(int u, int v) {
     }
     return 0.0;
 }
+// --- Helper for Multi-Shard Extension ---
+// Selects 'count' best nodes from a larger candidate pool
+std::vector<int> Simulation::choose_multi_nodes(int s, int count) {
+    std::vector<int> candidates;
+    
+    // Need enough unique candidates to pick 'count' servers
+    // We pool (count + k + L) to be safe and ensure diversity
+    int target_pool = std::max(count, count + k + L);
+    candidates.reserve(target_pool);
+    candidates.push_back(s);
 
+    std::uniform_int_distribution<int> U(0, n - 1);
+    std::unordered_set<int> used;
+    used.insert(s);
+
+    // -- Candidate Generation (Simplified Adapter) --
+    // For Multi-Shard, we generally just fill with Spatial or Random 
+    // depending on the policy to get enough candidates.
+    
+    if (policy == "spatialKL" && !k_nbrs.empty()) {
+        // Add neighbors first
+        for (int v : k_nbrs[s]) {
+             if (used.find(v) == used.end()) {
+                 used.insert(v);
+                 candidates.push_back(v);
+             }
+        }
+    }
+    
+    // Fill remainder with randoms (works for pot, poKL, weighted fallback)
+    while ((int)candidates.size() < target_pool) {
+        int r = U(rng);
+        if (used.find(r) == used.end()) {
+            used.insert(r);
+            candidates.push_back(r);
+        }
+    }
+
+    // -- Sort and Pick Top 'count' --
+    auto get_score = [&](int cand) {
+        double score = (double)q[cand];
+        if (topology == "cluster") score += calculate_distance(s, cand);
+        return score;
+    };
+
+    if ((int)candidates.size() > count) {
+        std::partial_sort(candidates.begin(), 
+                          candidates.begin() + count, 
+                          candidates.end(),
+                          [&](int a, int b) {
+                              return get_score(a) < get_score(b);
+                          });
+        candidates.resize(count);
+    }
+    return candidates;
+}
 int Simulation::choose_node(int s) {
     std::vector<int> candidates;
     candidates.reserve(1 + k + L);
@@ -201,71 +258,57 @@ int Simulation::choose_node(int s) {
         }
         
     }
+    // ---------------------------------------------------------
+    // HYBRID WEIGHTED POLICY (Corrected)
+    // ---------------------------------------------------------
     else if (policy == "weighted") {
         // 1. Define Neighborhood & Weights
-        // We look at 'k' nodes to the left and 'k' nodes to the right.
         std::vector<int> neighborhood;
         std::vector<double> weights;
         
         neighborhood.reserve(2 * k);
         weights.reserve(2 * k);
 
-        // Loop from distance 1 up to k (the window radius)
         for (int dist = 1; dist <= k; ++dist) {
-            // Right Neighbor: (s + dist) % n
             int right = (s + dist) % n;
             neighborhood.push_back(right);
-            weights.push_back(1.0 / dist); // Weight decreases with distance
+            weights.push_back(1.0 / dist); 
 
-            // Left Neighbor: (s - dist + n) % n
             int left = (s - dist + n) % n;
             neighborhood.push_back(left);
             weights.push_back(1.0 / dist); 
         }
 
-        // 2. Sample Candidates
-        // discrete_distribution normalizes weights so they sum to 1.0
+        // 2. Pick ONE "Weighted" Candidate
         std::discrete_distribution<int> dist_sampler(weights.begin(), weights.end());
+        int idx = dist_sampler(rng);
+        int w_node = neighborhood[idx];
         
+        candidates.push_back(w_node);
+
+        // 3. Pick 'L' "Global Random" Candidates
+        // This ensures statistical diversity (Po3 performance)
         std::unordered_set<int> used;
         used.insert(s);
+        used.insert(w_node);
 
-        // We want 'L' *additional* probes
-        int target_size = 1 + L; 
-
-        while ((int)candidates.size() < target_size) {
-            // 'idx' is the index within our local 'neighborhood' vector
-            int idx = dist_sampler(rng);
-            int node = neighborhood[idx];
-
-            if (used.find(node) == used.end()) {
-                used.insert(node);
-                candidates.push_back(node);
+        int randoms_needed = L; 
+        while (randoms_needed > 0) {
+            int r = U(rng);
+            if (used.find(r) == used.end()) {
+                used.insert(r);
+                candidates.push_back(r);
+                randoms_needed--;
             }
         }
     }
+    // ---------------------------------------------------------
     
 
     // --- SELECTION LOGIC ---
     int best = candidates[0];
     double best_score = 1e30;
 
-    //for (int cand : candidates) {
-    //    double score;
-    //    if (topology == "cluster") {
-    //        // Score = Queue Length + Comm Cost
-    //        double processing_time = q[cand]; 
-    //        double cost = calculate_distance(s, cand);
-    //        score = processing_time + cost;
-    //    } else {
-    //        score = (double)q[cand];
-    //    }
-
-    //    if (score < best_score) {
-    //        best = cand;
-    //    }
-    //}
-    //return best;
     for (int cand : candidates) {
 
         
@@ -285,7 +328,7 @@ SimulationResult Simulation::run() {
     int warmup = static_cast<int>(max_jobs * 0.2);
     
     std::uniform_int_distribution<int> U(0, n - 1);
-
+    std::uniform_int_distribution<int> U_shards(1, max_shards);
     while (arrivals < max_jobs) {
         // 1. Find the next event (min_service vs t_arr)
         int min_idx = -1;
@@ -299,7 +342,7 @@ SimulationResult Simulation::run() {
 
         double dt = std::min(t_arr, min_service);
         
-        // --- CRITICAL FIX: Time-Weighted Histogram Update ---
+        // --- Time-Weighted Histogram Update ---
         // Only record stats after warmup
         if (arrivals > warmup && dt > 0) {
             T += dt;
@@ -323,7 +366,6 @@ SimulationResult Simulation::run() {
         if (t_arr <= 1e-9) { // ARRIVAL
             arrivals++;
             
-            // (Removed the old random sampling code here)
 
             double job_duration;
             if (use_trace) {
@@ -333,15 +375,34 @@ SimulationResult Simulation::run() {
             }
 
             int s = U(rng);
-            int chosen = choose_node(s);
-            q[chosen]++;
-
-            if (arrivals > warmup) {
-                req_dist += calculate_distance(s, chosen);
-                arrivals_recorded++;
+            // --- MULTI-SHARD LOGIC ---
+            int required_shards = 1;
+            if (max_shards > 1) {
+                required_shards = U_shards(rng);
             }
 
-            if (q[chosen] == 1) s_time[chosen] = job_duration;
+            // Path A: Single Server (Optimized)
+            if (required_shards == 1) {
+                int chosen = choose_node(s);
+                q[chosen]++;
+                if (arrivals > warmup) {
+                    req_dist += calculate_distance(s, chosen);
+                }
+                if (q[chosen] == 1) s_time[chosen] = job_duration;
+            }
+            // Path B: Multi-Server
+            else {
+                std::vector<int> targets = choose_multi_nodes(s, required_shards);
+                for (int node : targets) {
+                    q[node]++;
+                    if (arrivals > warmup) {
+                        req_dist += calculate_distance(s, node);
+                    }
+                    if (q[node] == 1) s_time[node] = job_duration;
+                }
+            }
+            // ------------------------
+            if (arrivals > warmup) arrivals_recorded++;
 
             if (use_trace) {
                 if (trace_idx < trace_jobs.size()) {

@@ -59,6 +59,7 @@ int main(int argc, char* argv[]) {
     int k = 1;
     int L = 1;
     int qmax = 100;
+    int max_shards = 1; // Default to standard behavior
     
     int num_clusters = 1;
     double comm_cost = 0.0;
@@ -81,6 +82,9 @@ int main(int argc, char* argv[]) {
         else if(strcmp(argv[i], "--trace")==0) trace_file = argv[++i];
         else if(strcmp(argv[i], "--outdir")==0) outdir = argv[++i];
         else if(strcmp(argv[i], "--tag")==0) tag_suffix = argv[++i];
+        // UPDATE: Parse new argument
+        else if(strcmp(argv[i], "--x")==0) max_shards = std::stoi(argv[++i]);
+        else if(strcmp(argv[i], "--max_shards")==0) max_shards = std::stoi(argv[++i]);
     }
 
     fs::create_directories(outdir);
@@ -96,10 +100,13 @@ int main(int argc, char* argv[]) {
 
     std::cout << "Running: N=" << n << " Policy=" << policy 
               << " Topo=" << topo;
+    if (max_shards > 1) std::cout << " [MaxShards=" << max_shards << "]";
     if (!trace_file.empty()) std::cout << " [Trace: " << trace_file << "]";
     std::cout << "..." << std::flush;
     
+    // UPDATE: Pass max_shards to constructor
     Simulation sim(n, lambda, m, mu, policy, topo, dist, k_nbrs, k, L, qmax, 
+                   max_shards, // <--- New Argument
                    num_clusters, comm_cost, trace_file);
                    
     SimulationResult result = sim.run();
